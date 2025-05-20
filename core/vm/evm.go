@@ -120,6 +120,10 @@ type EVM struct {
 	// available gas is calculated in gasCall* according to the 63/64 rule and later
 	// applied in opCall*.
 	callGasTemp uint64
+	RGraphs     []*ReducedGraph
+	ReducedDB   *ReducedDB
+	MemDB       *MemDB
+	NodeId      int
 }
 
 // NewEVM returns a new EVM. The returned EVM is not thread safe and should
@@ -128,6 +132,9 @@ func NewEVM(blockCtx BlockContext, txCtx TxContext, statedb StateDB, chainConfig
 	evm := &EVM{
 		Context:     blockCtx,
 		TxContext:   txCtx,
+		ReducedDB:   NewReducedDB(),
+		MemDB:       NewMemDB(),
+		NodeId:      0,
 		StateDB:     statedb,
 		Config:      config,
 		chainConfig: chainConfig,
