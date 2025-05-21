@@ -42,6 +42,9 @@ import (
 	"github.com/ethereum/go-ethereum/trie/utils"
 	"github.com/holiman/uint256"
 	"golang.org/x/sync/errgroup"
+
+	// record-replay: import research
+	"github.com/ethereum/go-ethereum/research"
 )
 
 const defaultNumOfSlots = 100
@@ -168,6 +171,11 @@ type StateDB struct {
 	StorageLoaded  int          // Number of storage slots retrieved from the database during the state transition
 	StorageUpdated atomic.Int64 // Number of storage slots updated during the state transition
 	StorageDeleted atomic.Int64 // Number of storage slots deleted during the state transition
+
+	// record-replay: ResearchPreAlloc, ResearchPostAlloc, ResearchBlockHashes of StateDB
+	ResearchPreAlloc    research.SubstateAlloc
+	ResearchPostAlloc   research.SubstateAlloc
+	ResearchBlockHashes map[uint64]common.Hash
 }
 
 // NewWithSharedPool creates a new state with sharedStorge on layer 1.5
@@ -209,6 +217,12 @@ func New(root common.Hash, db Database) (*StateDB, error) {
 	if db.TrieDB().IsVerkle() {
 		sdb.accessEvents = NewAccessEvents(db.PointCache())
 	}
+
+	// record-replay: init StateDB.Research*
+	sdb.ResearchPreAlloc = make(research.SubstateAlloc)
+	sdb.ResearchPostAlloc = make(research.SubstateAlloc)
+	sdb.ResearchBlockHashes = make(map[uint64]common.Hash)
+
 	return sdb, nil
 }
 
@@ -684,7 +698,21 @@ func (s *StateDB) deleteStateObject(addr common.Address) {
 
 // getStateObject retrieves a state object given by the address, returning nil if
 // the object is not found or was deleted in this execution context.
-func (s *StateDB) getStateObject(addr common.Address) *stateObject {
+func (s *StateDB) getStateObject(addr common.Address) (obj *stateObject) {
+	defer func() {
+		if obj != nil && !obj.deleted {
+			// record-replay: insert the account in StateDB.ResearchPreAlloc
+			if _, exist := s.ResearchPreAlloc[addr]; !exist {
+				s.ResearchPreAlloc[addr] = research.NewSubstateAccount(obj.Nonce(), obj.Balance(), obj.Code(s.db))
+			}
+		}
+
+		// record-replay: insert empty account in StateDB.ResearchPreAlloc
+		// This will prevent insertion of new account created in txs
+		if _, exist := s.ResearchPreAlloc[addr]; !exist {
+			s.ResearchPreAlloc[addr] = nil
+		}
+	}()
 	// Prefer live objects if any is available
 	if obj := s.stateObjects[addr]; obj != nil {
 		return obj
@@ -841,6 +869,33 @@ func (s *StateDB) copyInternal(doPrefetch bool) *StateDB {
 		}
 		state.logs[hash] = cpy
 	}
+	{
+		// for evmtracer
+		for hash, preimage := range s.preimages {
+			state.preimages[hash] = preimage
+		}
+
+		// record-replay: copy StateDB.Research*
+		state.ResearchPreAlloc = make(research.SubstateAlloc)
+		state.ResearchPostAlloc = make(research.SubstateAlloc)
+		state.ResearchBlockHashes = make(map[uint64]common.Hash)
+		for addr, account := range s.ResearchPreAlloc {
+			state.ResearchPreAlloc[addr] = account.Copy()
+		}
+		for addr, account := range s.ResearchPostAlloc {
+			state.ResearchPostAlloc[addr] = account.Copy()
+		}
+		for num64, bhash := range s.ResearchBlockHashes {
+			state.ResearchBlockHashes[num64] = bhash
+		}
+
+		// Do we need to copy the access list? In practice: No. At the start of a
+		// transaction, the access list is empty. In practice, we only ever copy state
+		// _between_ transactions/blocks, never in the middle of a transaction.
+		// However, it doesn't cost us much to copy an empty list, so we do it anyway
+		// to not blow up if we ever decide copy it in the middle of a transaction
+		state.accessList = s.accessList.Copy()
+	}
 
 	state.prefetcher = s.prefetcher
 	if s.prefetcher != nil && !doPrefetch {
@@ -871,6 +926,20 @@ func (s *StateDB) GetRefund() uint64 {
 // the journal as well as the refunds. Finalise, however, will not push any updates
 // into the tries just yet. Only IntermediateRoot or Commit will do that.
 func (s *StateDB) Finalise(deleteEmptyObjects bool) {
+	// record-replay: copy original storage values to Prestate and Poststate
+	for addr, sa := range s.ResearchPreAlloc {
+		if sa == nil {
+			delete(s.ResearchPreAlloc, addr)
+			continue
+		}
+
+		obj := s.stateObjects[addr]
+		for key := range obj.ResearchTouched {
+			sa.Storage[key] = obj.GetCommittedState(s.db, key)
+		}
+		s.ResearchPostAlloc[addr] = sa.Copy()
+	}
+
 	addressesToPrefetch := make([]common.Address, 0, len(s.journal.dirties))
 	for addr := range s.journal.dirties {
 		obj, exist := s.stateObjects[addr]
@@ -892,7 +961,18 @@ func (s *StateDB) Finalise(deleteEmptyObjects bool) {
 			if _, ok := s.stateObjectsDestruct[obj.address]; !ok {
 				s.stateObjectsDestruct[obj.address] = obj
 			}
+
+			// record-replay: delete account from StateDB.ResearchPostAlloc
+			delete(s.ResearchPostAlloc, addr)
+
 		} else {
+			// record-replay: copy dirty account to StateDB.ResearchPostAlloc
+			sa := research.NewSubstateAccount(obj.Nonce(), obj.Balance(), obj.Code(s.db))
+			for key := range obj.ResearchTouched {
+				sa.Storage[key] = obj.GetState(s.db, key)
+			}
+			s.ResearchPostAlloc[addr] = sa
+
 			obj.finalise()
 			s.markUpdate(addr)
 		}
@@ -1090,6 +1170,16 @@ func (s *StateDB) IntermediateRoot(deleteEmptyObjects bool) common.Hash {
 func (s *StateDB) SetTxContext(thash common.Hash, ti int) {
 	s.thash = thash
 	s.txIndex = ti
+
+	// record-replay: reset StateDB.Research* and stateObject.Research*
+	s.ResearchPreAlloc = make(research.SubstateAlloc)
+	s.ResearchPostAlloc = make(research.SubstateAlloc)
+	s.ResearchBlockHashes = make(map[uint64]common.Hash)
+	for _, obj := range s.stateObjects {
+		obj.ResearchTouched = make(map[common.Hash]struct{})
+	}
+
+	s.accessList = newAccessList()
 }
 
 // StateDB.Prepare is not called before processing a system transaction, call ClearAccessList instead.

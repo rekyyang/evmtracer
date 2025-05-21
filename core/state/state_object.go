@@ -87,6 +87,9 @@ type stateObject struct {
 	// object was previously existent and is being deployed as a contract within
 	// the current transaction.
 	newContract bool
+
+	// record-replay: stateObject.ResearchTouched
+	ResearchTouched map[common.Hash]struct{}
 }
 
 // empty returns whether the account is considered empty.
@@ -117,6 +120,9 @@ func newObject(db *StateDB, address common.Address, acct *types.StateAccount) *s
 		pendingStorage:      make(Storage),
 		dirtyStorage:        make(Storage),
 		uncommittedStorage:  make(Storage),
+
+		// record-replay: init stateObject.ResearchTouched
+		ResearchTouched: make(map[common.Hash]struct{}),
 	}
 }
 
@@ -188,6 +194,11 @@ func (s *stateObject) setOriginStorage(key common.Hash, value common.Hash) {
 // GetState retrieves a value from the committed account storage trie.
 // GetState retrieves a value associated with the given storage key.
 func (s *stateObject) GetState(key common.Hash) common.Hash {
+	// record-replay: mark keys touched by GetState
+	if _, exist := s.ResearchTouched[key]; !exist {
+		s.ResearchTouched[key] = struct{}{}
+	}
+
 	value, _ := s.getState(key)
 	return value
 }
@@ -313,6 +324,9 @@ func (s *stateObject) finalise() {
 	// of the newly-created object as it's no longer eligible for self-destruct
 	// by EIP-6780. For non-newly-created objects, it's a no-op.
 	s.newContract = false
+
+	// record-replay: clear stateObject.ResearchTouched
+	s.ResearchTouched = make(map[common.Hash]struct{})
 }
 
 // updateTrie is responsible for persisting cached storage changes into the
@@ -546,6 +560,13 @@ func (s *stateObject) deepCopy(db *StateDB) *stateObject {
 	if s.trie != nil {
 		obj.trie = mustCopyTrie(s.trie)
 	}
+
+	// record-replay: deepCopy obj.ResearchTouched
+	obj.ResearchTouched = make(map[common.Hash]struct{})
+	for key := range s.ResearchTouched {
+		obj.ResearchTouched[key] = struct{}{}
+	}
+
 	return obj
 }
 

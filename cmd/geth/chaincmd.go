@@ -51,6 +51,10 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/triedb"
 	"github.com/ethereum/go-ethereum/triedb/pathdb"
+	"gopkg.in/urfave/cli.v1"
+
+	// record-replay: import research
+	"github.com/ethereum/go-ethereum/research"
 )
 
 var (
@@ -142,7 +146,9 @@ if one is set.  Otherwise it prints the genesis from the datadir.`,
 			utils.VMTraceJsonConfigFlag,
 			utils.TransactionHistoryFlag,
 			utils.StateHistoryFlag,
-		}, utils.DatabaseFlags),
+		}, utils.DatabaseFlags,
+			// record-replay: geth import --substatedir flag
+			research.SubstateDirFlag),
 		Description: `
 The import command imports blocks from an RLP-encoded form. The form can be one file
 with several RLP-encoded blocks, or several files can be used.
@@ -697,6 +703,11 @@ func dumpGenesis(ctx *cli.Context) error {
 }
 
 func importChain(ctx *cli.Context) error {
+	// record-replay: importChain OpenSubstateDB
+	research.SetSubstateFlags(ctx)
+	research.OpenSubstateDB()
+	defer research.CloseSubstateDB()
+
 	if ctx.Args().Len() < 1 {
 		utils.Fatalf("This command requires an argument.")
 	}

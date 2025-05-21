@@ -122,6 +122,12 @@ type EVM struct {
 	callGasTemp uint64
 	// precompiles holds the precompiled contracts for the current epoch
 	precompiles map[common.Address]PrecompiledContract
+
+	// for evmtracer
+	RGraphs   []*ReducedGraph
+	ReducedDB *ReducedDB
+	MemDB     *MemDB
+	NodeId    int
 }
 
 // NewEVM constructs an EVM instance with the supplied block context, state
@@ -135,6 +141,11 @@ func NewEVM(blockCtx BlockContext, statedb StateDB, chainConfig *params.ChainCon
 		Config:      config,
 		chainConfig: chainConfig,
 		chainRules:  chainConfig.Rules(blockCtx.BlockNumber, blockCtx.Random != nil, blockCtx.Time),
+
+		// for evmtracer
+		ReducedDB: NewReducedDB(),
+		MemDB:     NewMemDB(),
+		NodeId:    0,
 	}
 	evm.precompiles = activePrecompiledContracts(evm.chainRules)
 	evm.interpreter = NewEVMInterpreter(evm)
