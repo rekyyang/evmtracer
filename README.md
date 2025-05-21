@@ -1,3 +1,16 @@
+# BNB Smart Chain With EVM Tracer 
+See [research/README.md](research/README.md) to find how to use the tracer to collect statistics.
+
+# Ethereum Substate Recorder/Replayer
+
+Ethereum substate recorder/replayer based on the paper:
+
+**Yeonsoo Kim, Seongho Jeong, Kamil Jezek, Bernd Burgstaller, and Bernhard Scholz**: _An Off-The-Chain Execution Environment for Scalable Testing and Profiling of Smart Contracts_,  USENIX ATC'21
+
+See [research/README.md](research/README.md) to find how to use substate recorder/replayer. Git tags of `record-replay` releases starts with prefix `rr` (e.g. `rr0.3.2`) to distinguish Geth releases with prefix `v` (e.g. `v1.10.15`).
+
+Visit [verovm/usenix-atc21](https://github.com/verovm/usenix-atc21) repository for software artifact from the ATC'21 paper.
+
 ## BNB Smart Chain
 
 The goal of BNB Smart Chain is to bring programmability and interoperability to BNB Beacon Chain. In order to embrace the existing popular community and advanced technology, it will bring huge benefits by staying compatible with all the existing smart contracts on Ethereum and Ethereum tooling. And to achieve that, the easiest solution is to develop based on go-ethereum fork, as we respect the great work of Ethereum very much.

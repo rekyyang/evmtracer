@@ -35,14 +35,30 @@ type Config struct {
 	ExtraEips               []int // Additional EIPS that are to be enabled
 
 	StatelessSelfValidation bool // Generate execution witnesses and self-check against them (testing purpose)
+
+	// for evmtracer
+	JumpTable *JumpTable // EVM instruction table, automatically populated if unset
+
+	ExtraEips []int // Additional EIPS that are to be enabled
+
+	BlockNum int64
 }
 
 // ScopeContext contains the things that are per-call, such as stack and memory,
 // but not transients like pc and gas
 type ScopeContext struct {
-	Memory   *Memory
-	Stack    *Stack
-	Contract *Contract
+	Memory    *Memory
+	Stack     *Stack
+	Contract  *Contract
+	MemDB     *MemDB
+	idCounter int64
+	// reduced graph
+	rdstack   *ReducedStack
+	rmemory   *ReducedMemory
+	mmemory   *MemMemory
+	rgraph    *ReducedGraph
+	destRNode *RNode
+	rgasCost  uint64
 }
 
 // MemoryData returns the underlying memory slice. Callers must not modify the contents
@@ -161,6 +177,9 @@ func NewEVMInterpreter(evm *EVM) *EVMInterpreter {
 // considered a revert-and-consume-all-gas operation except for
 // ErrExecutionReverted which means revert-and-keep-gas-left.
 func (in *EVMInterpreter) Run(contract *Contract, input []byte, readOnly bool) (ret []byte, err error) {
+	Debug("==================================\n")
+	Debug("New Context:\n")
+
 	// Increment the call depth which is restricted to 1024
 	in.evm.depth++
 	defer func() { in.evm.depth-- }()
@@ -185,10 +204,21 @@ func (in *EVMInterpreter) Run(contract *Contract, input []byte, readOnly bool) (
 		op          OpCode        // current opcode
 		mem         = NewMemory() // bound memory
 		stack       = newstack()  // local stack
+		rdstack     = NewReducedStack()
+		rmemory     = NewReducedMemory()
+		mmemory     = NewMemMemory()
+		memdb       = NewMemDB()
 		callContext = &ScopeContext{
-			Memory:   mem,
-			Stack:    stack,
-			Contract: contract,
+			Memory:    mem,
+			Stack:     stack,
+			Contract:  contract,
+			MemDB:     memdb,
+			idCounter: 0,
+			rgraph:    NewReducedGraph(in.cfg.BlockNum, in.evm),
+			rdstack:   rdstack,
+			rmemory:   rmemory,
+			mmemory:   mmemory,
+			rgasCost:  0,
 		}
 		// For optimisation reason we're using uint64 as the program counter.
 		// It's theoretically possible to go above 2^64. The YP defines the PC
@@ -224,6 +254,10 @@ func (in *EVMInterpreter) Run(contract *Contract, input []byte, readOnly bool) (
 			}
 		}()
 	}
+	// log the trace
+	defer func() {
+		in.evm.RGraphs = append(in.evm.RGraphs, callContext.rgraph)
+	}()
 	// The Interpreter main run loop (contextual). This loop runs until either an
 	// explicit STOP, RETURN or SELFDESTRUCT is executed, an error occurred during
 	// the execution of one of the operations or until the done flag is set by the
@@ -306,10 +340,29 @@ func (in *EVMInterpreter) Run(contract *Contract, input []byte, readOnly bool) (
 		}
 		if memorySize > 0 {
 			mem.Resize(memorySize)
+			mmemory.Resize(memorySize)
+			rmemory.Resize(memorySize, callContext.destRNode, callContext.rgraph)
 		}
+
+		callContext.rgasCost = cost
+		callContext.destRNode = &RNode{op: op, deps: nil, id: 0}
+
+		// TODO: apply evmtracer
+		// if in.cfg.Debug {
+		// 	in.cfg.Tracer.CaptureState(pc, op, gasCopy, cost, callContext, in.returnData, in.evm.depth, err)
+		// 	logged = true
+		// }
+		// // fmt.Printf("Before %s, stack: %d, sstack: %d\n",
+		// // 	opCodeToString[op], callContext.Stack.len(), len(callContext.sstack.data))
+		// // if callContext.Stack.len() != len(callContext.sstack.data) {
+		// // 	fmt.Printf("ERROR: stack: %d v.s. sstack: %d\n",
+		// // 		callContext.Stack.len(), len(callContext.sstack.data))
+		// // 	panic("Unsync stack size\n")
+		// // }
 
 		// execute the operation
 		res, err = operation.execute(&pc, in, callContext)
+		callContext.idCounter += 1
 		if err != nil {
 			break
 		}
