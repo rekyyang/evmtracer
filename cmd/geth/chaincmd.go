@@ -39,6 +39,9 @@ import (
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/node"
 	"gopkg.in/urfave/cli.v1"
+
+	// record-replay: import research
+	"github.com/ethereum/go-ethereum/research"
 )
 
 var (
@@ -102,6 +105,8 @@ The dumpgenesis command dumps the genesis block configuration in JSON format to 
 			utils.MetricsInfluxDBBucketFlag,
 			utils.MetricsInfluxDBOrganizationFlag,
 			utils.TxLookupLimitFlag,
+			// record-replay: geth import --substatedir flag
+			research.SubstateDirFlag,
 		},
 		Category: "BLOCKCHAIN COMMANDS",
 		Description: `
@@ -233,6 +238,12 @@ func dumpGenesis(ctx *cli.Context) error {
 }
 
 func importChain(ctx *cli.Context) error {
+
+	// record-replay: importChain OpenSubstateDB
+	research.SetSubstateFlags(ctx)
+	research.OpenSubstateDB()
+	defer research.CloseSubstateDB()
+
 	if len(ctx.Args()) < 1 {
 		utils.Fatalf("This command requires an argument.")
 	}
